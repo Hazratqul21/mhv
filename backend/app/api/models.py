@@ -4,6 +4,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.version import MIYA_VERSION
+
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=32_000)
@@ -30,7 +32,7 @@ class ChatResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str = "ok"
-    version: str = "0.1.0"
+    version: str = MIYA_VERSION
     uptime_seconds: float = 0.0
     services: dict[str, str] = Field(default_factory=dict)
 

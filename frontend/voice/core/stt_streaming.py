@@ -146,6 +146,12 @@ class StreamingSTT:
                     "[Nutqni matnga aylantirishda xotira yetmadi. "
                     "MIYA_STT_MODEL=tiny qilib qayta ishga tushiring yoki boshqa GPU dasturlarni yoping.]"
                 )
+        except Exception:
+            log.exception("STT unexpected error")
+            return (
+                "[Nutqni tanishda xatolik. faster-whisper o‘rnatilganini, "
+                "MIYA_STT_MODEL o‘lchamini va loglarni tekshiring.]"
+            )
 
     async def transcribe(self, audio: np.ndarray) -> str:
         """Transcribe *audio* (float32, 16kHz, mono) and return text."""

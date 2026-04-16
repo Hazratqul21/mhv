@@ -46,9 +46,15 @@ def verify_token(token: str) -> dict[str, Any]:
             raise JWTError("Missing subject claim")
         return payload
     except JWTError as exc:
+        settings = get_settings()
+        detail = (
+            f"Invalid or expired token: {exc}"
+            if settings.env == "development"
+            else "Invalid or expired token"
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid or expired token: {exc}",
+            detail=detail,
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 

@@ -10,6 +10,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from app.api.auth import verify_token
 from app.config import get_settings
 from app.utils.logger import get_logger
+from app.utils.public_errors import safe_error_detail
 
 log = get_logger(__name__)
 
@@ -66,6 +67,8 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 HEARTBEAT_INTERVAL = 30  # seconds
+# Receive idle limit (slowloris / hung clients)
+WS_RECEIVE_TIMEOUT = 300.0
 
 
 @ws_router.websocket("/ws/{session_id}")
@@ -97,7 +100,15 @@ async def websocket_endpoint(ws: WebSocket, session_id: str, token: str = Query(
         heartbeat_task = asyncio.create_task(_heartbeat())
 
         while True:
-            raw = await ws.receive_text()
+            try:
+                raw = await asyncio.wait_for(
+                    ws.receive_text(), timeout=WS_RECEIVE_TIMEOUT
+                )
+            except asyncio.TimeoutError:
+                await ws.send_json(
+                    {"type": "error", "detail": "Receive idle timeout; send a message or reconnect."}
+                )
+                break
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
@@ -197,4 +208,7 @@ async def _handle_chat(ws: WebSocket, session_id: str, data: dict[str, Any]):
         await ws.send_json({"type": "error", "detail": "Request timed out (6 min). Try a simpler query."})
     except Exception as exc:
         log.error("ws_chat_error", session_id=session_id, error=str(exc))
-        await ws.send_json({"type": "error", "detail": str(exc)})
+        settings = get_settings()
+        await ws.send_json(
+            {"type": "error", "detail": safe_error_detail(settings.env, exc)}
+        )

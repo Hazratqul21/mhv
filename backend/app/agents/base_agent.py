@@ -62,14 +62,14 @@ class BaseAgent(ABC):
         if not resolved.exists():
             raise FileNotFoundError(f"Model not found: {resolved}")
 
-        logger.info("Loading model for agent '%s' from %s", self.name, resolved)
+        logger.info("agent_loading_model", agent=self.name, path=str(resolved))
         self.llm = Llama(
             model_path=str(resolved),
             n_ctx=self._settings.llm_context_length if hasattr(self._settings, "llm_context_length") else 4096,
             n_gpu_layers=self._settings.llm_gpu_layers if hasattr(self._settings, "llm_gpu_layers") else -1,
             verbose=False,
         )
-        logger.info("Agent '%s' model loaded successfully", self.name)
+        logger.info("agent_model_loaded", agent=self.name)
 
     @abstractmethod
     async def execute(

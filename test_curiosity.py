@@ -357,8 +357,6 @@ async def test_hot_reload():
         return
 
     engine._models["old-model.gguf"] = MagicMock()
-    engine._locks["old-model.gguf"] = asyncio.Lock()
-
     try:
         object.__setattr__(engine._settings, "chat_model", "old-model.gguf")
     except Exception:

@@ -4,8 +4,10 @@ from pathlib import Path
 from functools import lru_cache
 from typing import Optional
 
+import warnings
+
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
-from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -128,6 +130,18 @@ class Settings(BaseSettings):
         env_file = str(Path(__file__).resolve().parent.parent.parent / ".env")
         env_file_encoding = "utf-8"
         extra = "ignore"
+
+    @model_validator(mode="after")
+    def warn_default_secrets_in_production(self) -> "Settings":
+        if (self.env or "").lower() not in ("development", "dev", "test"):
+            if self.secret_key == "change-me" or self.jwt_secret == "change-me":
+                warnings.warn(
+                    "MIYA_SECRET_KEY and/or JWT_SECRET are still default 'change-me' "
+                    f"while MIYA_ENV={self.env!r}. Set strong secrets before exposing the API.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+        return self
 
     def model_post_init(self, __context) -> None:
         if self.models_dir is None:

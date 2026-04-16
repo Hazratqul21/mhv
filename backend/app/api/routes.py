@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 
@@ -24,12 +25,15 @@ from app.api.models import (
 )
 from app.config import get_settings
 from app.utils.logger import get_logger
+from app.utils.public_errors import safe_error_detail
+from app.version import MIYA_VERSION
 
 log = get_logger(__name__)
 
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+CHAT_PROCESS_TIMEOUT = 360.0  # seconds (WebSocket bilan bir xil)
 
 
 def _get_orchestrator(request: Request):
@@ -61,14 +65,27 @@ async def chat(
             for k, v in body.context.items():
                 if v is not None:
                     extra[str(k)] = v
-        result = await orchestrator.process(
-            query=body.message,
-            session_id=body.session_id,
-            extra_context=extra or None,
+        result = await asyncio.wait_for(
+            orchestrator.process(
+                query=body.message,
+                session_id=body.session_id,
+                extra_context=extra or None,
+            ),
+            timeout=CHAT_PROCESS_TIMEOUT,
         )
+    except asyncio.TimeoutError:
+        log.error("chat_timeout", session_id=body.session_id)
+        raise HTTPException(
+            status_code=504,
+            detail="Chat processing timed out. Try a shorter message or a simpler task.",
+        ) from None
     except Exception as exc:
         log.error("chat_error", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        settings = get_settings()
+        raise HTTPException(
+            status_code=500,
+            detail=safe_error_detail(settings.env, exc),
+        ) from exc
 
     return ChatResponse(**result)
 
@@ -88,7 +105,7 @@ async def health(request: Request):
 
     return HealthResponse(
         status="ok",
-        version="0.1.0",
+        version=MIYA_VERSION,
         uptime_seconds=round(time.time() - start_time, 2),
         services=services,
     )
@@ -281,7 +298,11 @@ async def finetune_collect(
         return {"collected": len(samples)}
     except Exception as exc:
         log.error("finetune_collect_error", error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        settings = get_settings()
+        raise HTTPException(
+            status_code=500,
+            detail=safe_error_detail(settings.env, exc),
+        ) from exc
 
 
 @router.post("/finetune/train", response_model=FineTuneJobResponse)

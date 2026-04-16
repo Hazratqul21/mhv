@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import shlex
+import os
 from typing import Any
 
 from app.config import get_settings
@@ -16,11 +16,15 @@ MAX_OUTPUT = 50_000
 class HostShellTool(BaseTool):
     """Execute shell commands directly on the host system.
 
-    Full autonomous access — no command restrictions.
+    Outside ``development`` this tool is **disabled** unless
+    ``MIYA_ALLOW_HOST_SHELL=1`` is set (intentional safety gate).
     """
 
     name = "host_shell"
-    description = "Execute bash commands on the host system (unrestricted)"
+    description = (
+        "Execute bash commands on the host system. "
+        "Disabled in non-development unless MIYA_ALLOW_HOST_SHELL=1."
+    )
     category = "system"
     parameters: dict[str, Any] = {
         "command": {
@@ -52,9 +56,21 @@ class HostShellTool(BaseTool):
         if not command:
             return {"success": False, "error": "'command' is required"}
 
+        settings = get_settings()
+        if settings.env != "development":
+            allowed = os.getenv("MIYA_ALLOW_HOST_SHELL", "").strip().lower()
+            if allowed not in ("1", "true", "yes", "on"):
+                return {
+                    "success": False,
+                    "error": (
+                        "host_shell is disabled when MIYA_ENV is not development. "
+                        "Set MIYA_ALLOW_HOST_SHELL=1 only if you accept full host access."
+                    ),
+                }
+
         language = input_data.get("language", "bash")
         cwd = input_data.get("cwd")
-        timeout = int(input_data.get("timeout", 30))
+        timeout = min(max(int(input_data.get("timeout", 30)), 1), 120)
 
         if language == "python":
             cmd = ["python3", "-c", command]

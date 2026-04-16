@@ -13,6 +13,18 @@ log = get_logger(__name__)
 DEFAULT_TTL = 3600  # 1 hour
 
 
+def _redis_url_for_log(url: str) -> str:
+    """Hide user:password in redis://…@host/… for logs."""
+    if "@" not in url or "://" not in url:
+        return url
+    try:
+        scheme, rest = url.split("://", 1)
+        _creds, hostpart = rest.rsplit("@", 1)
+        return f"{scheme}://***@{hostpart}"
+    except ValueError:
+        return url
+
+
 class CacheManager:
     """Async Redis cache with JSON serialization for complex values."""
 
@@ -33,7 +45,7 @@ class CacheManager:
                 socket_connect_timeout=5,
             )
             await self._redis.ping()
-            log.info("redis_connected", url=self._url)
+            log.info("redis_connected", url=_redis_url_for_log(self._url))
         return self._redis
 
     async def _conn(self) -> aioredis.Redis:

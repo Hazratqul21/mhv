@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.utils.logger import get_logger, setup_logging
+from app.version import MIYA_VERSION
 
 log = get_logger(__name__)
 
@@ -143,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         memory_adapter = None
 
     # ── Core engine + orchestrator ──────────────────────────────────────
+    engine = None
     try:
         from app.core.llm_engine import LLMEngine
         from app.core.orchestrator import MiyaOrchestrator
@@ -177,12 +180,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.error("orchestrator_init_failed", error=str(exc))
 
     # ── LLM Router ─────────────────────────────────────────────────────
-    try:
-        from app.core.llm_router import LLMRouter
-        app.state.llm_router = LLMRouter(engine)
-        log.info("llm_router_ready")
-    except Exception as exc:
-        log.warning("llm_router_failed", error=str(exc))
+    if engine is not None:
+        try:
+            from app.core.llm_router import LLMRouter
+            app.state.llm_router = LLMRouter(engine)
+            log.info("llm_router_ready")
+        except Exception as exc:
+            log.warning("llm_router_failed", error=str(exc))
+    else:
+        app.state.llm_router = None
+        log.warning("llm_router_skipped_no_engine")
 
     # ── Autonomous Systems ─────────────────────────────────────────────
     try:
@@ -287,7 +294,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Miya AI",
         description="Self-hosted multi-agent AI assistant",
-        version="0.1.0",
+        version=MIYA_VERSION,
         lifespan=lifespan,
     )
 
@@ -310,6 +317,18 @@ def create_app() -> FastAPI:
         return response
 
     # ── Exception handlers ─────────────────────────────────────────────
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        rid = getattr(request.state, "request_id", "unknown")
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": "Validation Error",
+                "request_id": rid,
+                "detail": exc.errors(),
+            },
+        )
+
     @app.exception_handler(404)
     async def not_found_handler(request: Request, exc):
         return JSONResponse(
@@ -318,7 +337,7 @@ def create_app() -> FastAPI:
         )
 
     @app.exception_handler(500)
-    async def server_error_handler(request: Request, exc):
+    async def server_error_handler(request: Request, exc: BaseException):
         rid = getattr(request.state, "request_id", "unknown")
         log.error("unhandled_error", request_id=rid, error=str(exc))
         return JSONResponse(
@@ -336,7 +355,7 @@ def create_app() -> FastAPI:
     # ── Convenience health on root ─────────────────────────────────────
     @app.get("/health")
     async def root_health():
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": MIYA_VERSION}
 
     # ── Serve web frontend at root ─────────────────────────────────────
     web_dir = settings.project_root / "frontend" / "web"
@@ -358,7 +377,7 @@ def create_app() -> FastAPI:
         return JSONResponse(
             content={
                 "name": "Miya AI",
-                "version": "0.1.0",
+                "version": MIYA_VERSION,
                 "docs": "/docs",
                 "health": "/health",
                 "api": "/api/v1",

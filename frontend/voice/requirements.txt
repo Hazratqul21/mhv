@@ -1,0 +1,13 @@
+openwakeword
+sounddevice
+numpy
+faster-whisper
+kokoro>=0.9
+httpx
+pystray
+Pillow
+soundfile
+psutil
+torch
+torchaudio
+onnxruntime

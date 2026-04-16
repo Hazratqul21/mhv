@@ -1,0 +1,183 @@
+version: '3.8'
+
+x-gpu-resources: &gpu-resources
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+services:
+  # ── Main API ────────────────────────────────────────────────────────────
+  miya-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: miya-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/models:/app/models:ro
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MIYA_DATA_DIR=/app/data
+    depends_on:
+      chroma:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    <<: *gpu-resources
+
+  # ── Vector Database ─────────────────────────────────────────────────────
+  chroma:
+    image: chromadb/chroma:0.4.15
+    container_name: miya-chroma
+    restart: unless-stopped
+    volumes:
+      - ./data/chroma:/chroma/chroma
+    ports:
+      - "8001:8000"
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/heartbeat"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Cache ───────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: miya-redis
+    restart: unless-stopped
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - ./data/redis:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # ── Search Engine ───────────────────────────────────────────────────────
+  searxng:
+    image: searxng/searxng:latest
+    container_name: miya-searxng
+    restart: unless-stopped
+    volumes:
+      - ./services/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    ports:
+      - "8080:8080"
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+
+  # ── Image Generation ────────────────────────────────────────────────────
+  comfyui:
+    image: yanwk/comfyui-boot:latest
+    container_name: miya-comfyui
+    restart: unless-stopped
+    volumes:
+      - ./data/comfyui:/root/ComfyUI
+      - ./backend/models:/models:ro
+    ports:
+      - "8188:8188"
+    profiles:
+      - full
+    <<: *gpu-resources
+
+  # ── Video Generation (CogVideoX) ───────────────────────────────────────
+  cogvideo:
+    build:
+      context: ./services/cogvideo
+      dockerfile: Dockerfile
+    container_name: miya-cogvideo
+    restart: unless-stopped
+    volumes:
+      - ./data/cogvideo:/app/outputs
+      - ./backend/models:/models:ro
+    ports:
+      - "8190:8190"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    profiles:
+      - full
+      - media
+    <<: *gpu-resources
+
+  # ── Music Generation (AudioCraft/MusicGen) ────────────────────────────
+  musicgen:
+    build:
+      context: ./services/musicgen
+      dockerfile: Dockerfile
+    container_name: miya-musicgen
+    restart: unless-stopped
+    volumes:
+      - ./data/musicgen:/app/outputs
+      - ./backend/models:/models:ro
+    ports:
+      - "8191:8191"
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+    profiles:
+      - full
+      - media
+    <<: *gpu-resources
+
+  # ── Object Storage ─────────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: miya-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    volumes:
+      - ./data/minio:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-miya}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-changeme123}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # ── Desktop UI ─────────────────────────────────────────────────────────
+  miya-desktop:
+    build:
+      context: ./frontend/desktop
+      dockerfile: Dockerfile
+    container_name: miya-desktop
+    restart: unless-stopped
+    ports:
+      - "7860:7860"
+    environment:
+      - API_URL=http://miya-api:8000
+    depends_on:
+      miya-api:
+        condition: service_healthy
+    profiles:
+      - full
+
+networks:
+  default:
+    name: miya-network

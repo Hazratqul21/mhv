@@ -1,0 +1,11 @@
+# ComfyUI extra model paths for MIYA
+# Maps shared model directory into ComfyUI's search paths
+
+miya:
+  base_path: /models/
+  checkpoints: checkpoints/
+  loras: loras/
+  vae: vae/
+  clip: clip/
+  controlnet: controlnet/
+  upscale_models: upscale/

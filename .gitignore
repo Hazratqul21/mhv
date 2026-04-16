@@ -1,0 +1,70 @@
+# ── Python / venv ─────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+!.env.sample
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+pip-wheel-metadata/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# ── Modellar (GGUF juda katta — GitHubga emas) ─────────────────────────
+*.gguf
+*.gguf.*
+backend/models/*.gguf
+# README skriptlar qolsin
+!backend/models/README.md
+
+# ── Node (agar keyin frontend qo‘shilsa) ───────────────────────────────
+node_modules/
+**/node_modules/
+.npm
+.yarn/cache
+.pnp.*
+.next/
+out/
+.nuxt/
+
+# ── Ma’lumotlar / kesh / chiqishlar (faqat ildizdagi data/) ─────────────
+/data/
+!/data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
+.cache/
+**/.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── IDE / lokal ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ── Jupyter ────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── Docker / lokal override ─────────────────────────────────────────────
+docker-compose.override.yml
+
+# ── Loglar / fon jarayonlari ─────────────────────────────────────────────
+/logs/
+*.log
+nohup.out

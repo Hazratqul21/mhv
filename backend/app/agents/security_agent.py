@@ -1,0 +1,189 @@
+from __future__ import annotations
+
+from typing import Any, Callable, Coroutine
+
+from app.config import get_settings
+from app.core.llm_engine import LLMEngine
+from app.utils.helpers import Timer
+from app.utils.logger import get_logger
+
+from .base_agent import AgentResult, BaseAgent
+from .voice_context import voice_prepend_after_first_system
+
+logger = get_logger(__name__)
+
+SYSTEM_PROMPT = (
+    "You are Miya's cybersecurity and code security specialist. You help users "
+    "identify vulnerabilities, audit code, and implement security best practices.\n\n"
+    "Capabilities:\n"
+    "- Code vulnerability scanning (OWASP Top 10)\n"
+    "- Security audit reports\n"
+    "- Dependency vulnerability assessment\n"
+    "- Secure coding recommendations\n"
+    "- Authentication & authorization review\n"
+    "- Encryption and secrets management advice\n"
+    "- Network security configuration\n"
+    "- Docker/container security hardening\n"
+    "- API security (rate limiting, input validation, CORS)\n"
+    "- Compliance guidance (GDPR, SOC2, HIPAA basics)\n\n"
+    "Rules:\n"
+    "- Classify vulnerabilities by severity: Critical / High / Medium / Low / Info\n"
+    "- Provide specific remediation steps for each finding\n"
+    "- Include code examples showing both vulnerable and fixed versions\n"
+    "- Never suggest security through obscurity\n"
+    "- Reference relevant CWE/CVE identifiers when applicable\n"
+    "- Always recommend the principle of least privilege"
+)
+
+SEVERITY_LEVELS = ["Critical", "High", "Medium", "Low", "Info"]
+
+SECURITY_TOOLS = ["linter", "sandbox", "file"]
+
+
+class SecurityAgent(BaseAgent):
+    """Security auditing, vulnerability scanning, and hardening agent."""
+
+    def __init__(self, llm_engine: LLMEngine) -> None:
+        settings = get_settings()
+        super().__init__(
+            name="security",
+            model_path=settings.code_model,
+            system_prompt=SYSTEM_PROMPT,
+            available_tools=SECURITY_TOOLS,
+        )
+        self._engine = llm_engine
+        self._model_name = settings.code_model
+
+    def ensure_loaded(self) -> None:
+        settings = get_settings()
+        try:
+            self._engine.get_model(self._model_name)
+        except KeyError:
+            self._engine.swap_model(self._model_name, n_ctx=settings.code_ctx)
+
+    async def execute(
+        self,
+        query: str,
+        context: dict[str, Any] | None = None,
+        tool_executor: Callable[..., Coroutine[Any, Any, Any]] | None = None,
+    ) -> AgentResult:
+        logger.info("[SecurityAgent] processing query (len=%d)", len(query))
+        self.ensure_loaded()
+        context = context or {}
+
+        all_tool_calls: list[dict[str, Any]] = []
+
+        with Timer() as t:
+            messages = self._build_messages(query, context)
+
+            try:
+                response = await self._engine.chat(
+                    model_filename=self._model_name,
+                    messages=messages,
+                    max_tokens=4096,
+                    temperature=0.1,
+                )
+            except Exception as exc:
+                logger.exception("[SecurityAgent] generation failed")
+                return AgentResult(
+                    success=False, output="", execution_time_ms=t.elapsed_ms, error=str(exc),
+                )
+
+            output = response.get("text", "") if isinstance(response, dict) else str(response)
+
+            tool_calls = self._parse_tool_calls(output)
+            if tool_calls and tool_executor:
+                output, extra = await self._audit_loop(
+                    messages, output, tool_calls, tool_executor
+                )
+                all_tool_calls.extend(extra)
+
+        return AgentResult(
+            success=True,
+            output=output,
+            tool_calls=all_tool_calls,
+            token_usage={
+                "prompt_tokens": response.get("prompt_tokens", 0),
+                "completion_tokens": response.get("completion_tokens", 0),
+            },
+            execution_time_ms=t.elapsed_ms,
+        )
+
+    async def _audit_loop(
+        self,
+        messages: list[dict[str, str]],
+        initial_output: str,
+        tool_calls: list[dict[str, Any]],
+        tool_executor: Any,
+        max_rounds: int = 3,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        all_calls: list[dict[str, Any]] = []
+        output = initial_output
+
+        for _ in range(max_rounds):
+            if not tool_calls:
+                break
+
+            results: list[str] = []
+            for call in tool_calls:
+                name = call.get("tool") or call.get("name", "linter")
+                args = call.get("args") or call.get("arguments", {})
+                all_calls.append({"tool": name, "args": args})
+                try:
+                    result = await tool_executor(name, args)
+                    results.append(f"[{name}] Result:\n{result}")
+                except Exception as exc:
+                    results.append(f"[{name}] Error: {exc}")
+
+            messages.append({"role": "assistant", "content": output})
+            messages.append({"role": "user", "content": "Audit results:\n" + "\n\n".join(results)})
+
+            try:
+                response = await self._engine.chat(
+                    model_filename=self._model_name,
+                    messages=messages,
+                    max_tokens=4096,
+                    temperature=0.1,
+                )
+                output = response.get("text", "") if isinstance(response, dict) else str(response)
+                tool_calls = self._parse_tool_calls(output)
+            except Exception:
+                logger.exception("[SecurityAgent] follow-up failed")
+                break
+
+        return output, all_calls
+
+    def _build_messages(
+        self, query: str, context: dict[str, Any]
+    ) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": self.system_prompt},
+        ]
+
+        scan_type = context.get("scan_type", "general")
+        type_instructions = {
+            "code_review": "Focus on code-level vulnerabilities: injection, XSS, auth flaws.",
+            "infrastructure": "Focus on infrastructure: Docker, network, TLS, firewall rules.",
+            "dependencies": "Focus on dependency vulnerabilities and outdated packages.",
+            "compliance": "Focus on compliance requirements and policy adherence.",
+            "general": "Perform a general security assessment.",
+        }
+        messages.append({
+            "role": "system",
+            "content": type_instructions.get(scan_type, type_instructions["general"]),
+        })
+
+        code = context.get("code")
+        if code:
+            messages.append({
+                "role": "system",
+                "content": f"Code to audit:\n```\n{code[:8000]}\n```",
+            })
+
+        history = context.get("history", [])
+        for msg in history[-4:]:
+            messages.append({"role": msg["role"], "content": msg["content"]})
+
+        messages.append({"role": "user", "content": query})
+        voice_prepend_after_first_system(messages, context)
+        return messages
